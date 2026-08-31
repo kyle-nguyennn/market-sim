@@ -321,20 +321,20 @@ You can run the official forecasting pipeline, produce valid Monte Carlo forecas
 
 ## T3
 
-- [ ] Clone official T3 repository.
+- [x] Clone official T3 repository.
 - [ ] Read:
-  - [ ] README
+  - [x] README
   - [ ] concepts documentation
-  - [ ] baseline README
-  - [ ] scoring / regression documentation
-- [ ] Build baseline ABIDES Docker image.
-- [ ] Run one simple public scenario.
+  - [x] baseline README
+  - [x] scoring / regression documentation
+- [x] Build baseline ABIDES Docker image.
+- [x] Run one simple public scenario.
 - [ ] Confirm generation of:
   - [ ] `trace.parquet`
   - [ ] `message_trace.parquet`
   - [ ] `events.json`
 - [ ] Run local scorer / regression check.
-- [ ] Record baseline throughput.
+- [x] Record baseline throughput.
 
 ### Deliverable
 
