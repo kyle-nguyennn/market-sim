@@ -1,0 +1,66 @@
+Track 3 Throughput Timer
+  Image:    track3-abides-baseline:latest
+  Scenario: regression_suite/scenarios/as06_throughput_fast.json
+  Runs:     5 (warmup discarded)
+
+  Run 1/5 (warm-up)  seed=481425548
+    -> 6,384 events/sec  (11.69s wall clock, peak=262MB)
+  Run 2/5 (scored)  seed=2141560590
+    -> 6,805 events/sec  (10.95s wall clock, peak=262MB)
+  Run 3/5 (scored)  seed=2065014021
+    -> 7,262 events/sec  (10.20s wall clock, peak=268MB)
+  Run 4/5 (scored)  seed=2097829639
+    -> 7,133 events/sec  (10.49s wall clock, peak=263MB)
+  Run 5/5 (scored)  seed=546074625
+    -> 6,898 events/sec  (10.75s wall clock, peak=266MB)
+
+============================================================
+ThroughputResult(image='track3-abides-baseline:latest', scenario='a350b90c-0348-5a64-8369-4d4d8bb3dbcd', runs=4, median=7,015 ev/s, mean=7,025 ev/s, std=182 ev/s)
+============================================================
+{
+  "image": "track3-abides-baseline:latest",
+  "scenario_id": "a350b90c-0348-5a64-8369-4d4d8bb3dbcd",
+  "seed_family": [
+    481425548,
+    2141560590,
+    2065014021,
+    2097829639,
+    546074625
+  ],
+  "raw_events_per_sec": [
+    6383.792243441535,
+    6805.255148789542,
+    7262.289200614503,
+    7132.882070029087,
+    6897.68018998593
+  ],
+  "warmup_discarded": true,
+  "median_events_per_sec": 7015.281130007508,
+  "mean_events_per_sec": 7024.526652354765,
+  "std_events_per_sec": 181.96286927941028,
+  "min_events_per_sec": 6805.255148789542,
+  "max_events_per_sec": 7262.289200614503,
+  "wall_clock_seconds": [
+    11.693362997000804,
+    10.949626188998081,
+    10.199951826998586,
+    10.492673125001602,
+    10.753470436000498
+  ],
+  "host_gpu_seconds": [
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "median_host_gpu_seconds": null,
+  "host_peak_memory_bytes": [
+    261873664,
+    261857280,
+    267833344,
+    263122944,
+    265752576
+  ],
+  "median_host_peak_memory_bytes": 264437760
+}
