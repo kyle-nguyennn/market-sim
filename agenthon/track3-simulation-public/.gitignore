@@ -41,3 +41,4 @@ regression_suite/gen_status.jsonl
 
 # organizer regeneration cache — units/ ships the self-contained reference copy
 regression_suite/reference_traces/
+units/*/*.parquet

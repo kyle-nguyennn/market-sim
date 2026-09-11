@@ -1,0 +1,25 @@
+# Local ABIDES baseline simulation and profiling environment.
+# Matches the Python minor version and runtime pins in baselines/Dockerfile.
+# From the repository root:
+#   mamba env create -f environment.yml
+#   mamba activate track3-baseline
+# Then install the pinned, patched ABIDES packages as described in
+# baselines/README.md under "Installing and running locally (without Docker)".
+# ABIDES needs local patches, so an unpatched pip Git dependency is insufficient.
+name: agenthon
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - git
+  # Use pip wheels, matching the Docker baseline's installation method.
+  - pip:
+      - numpy==1.26.4
+      - pandas==1.5.3
+      - scipy==1.17.1
+      - pyarrow==15.0.2
+      - coloredlogs==15.0.1
+      # Profiling tool; cProfile is included with Python.
+      - py-spy==0.4.2
