@@ -21,7 +21,7 @@ English executive summary a finance student can follow.
   one track whose scorer is a package, not a `scoring/` directory: Tracks 2 and 4 do have
   `scoring/scoring.py`, and copying their layout here creates a second, unreachable scorer.
 - `throughput/timer.py` — local measurement harness
-- `baselines/` — pinned upstream ABIDES commit reference (no git submodule), vectorized stubs
+- `baselines/` — pinned upstream ABIDES commit reference (no git submodule), vectorized stubs. DO NOT CHANGE OR EDIT THESE FILES
 - `templates/` — scenario and card templates
 - `units/` — public example units (no sealed answers)
 

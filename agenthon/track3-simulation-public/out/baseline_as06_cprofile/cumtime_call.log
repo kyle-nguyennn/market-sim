@@ -1,0 +1,51 @@
+Welcome to the profile statistics browser.
+/output/t3.prof% sort cumtime
+/output/t3.prof% stats 40
+Fri Sep 11 06:28:27 2026    /output/t3.prof
+
+         21370119 function calls (20959388 primitive calls) in 15.157 seconds
+
+   Ordered by: cumulative time
+   List reduced from 4644 to 40 due to restriction <40>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    867/1    0.017    0.000   15.223   15.223 {built-in method builtins.exec}
+        1    0.000    0.000   15.223   15.223 <string>:1(<module>)
+        1    0.000    0.000   15.223   15.223 <frozen runpy>:201(run_module)
+        1    0.000    0.000   14.575   14.575 <frozen runpy>:65(_run_code)
+        1    0.000    0.000   14.575   14.575 /opt/abides_fork/simulate.py:1(<module>)
+        1    0.003    0.003   14.132   14.132 /opt/abides_fork/simulate.py:106(main)
+        1    0.016    0.016   14.127   14.127 /opt/abides_fork/simulate.py:54(simulate)
+        1    0.000    0.000   11.779   11.779 /usr/local/lib/python3.11/site-packages/abides_core/abides.py:15(run)
+        1    0.000    0.000   11.778   11.778 /usr/local/lib/python3.11/site-packages/abides_core/kernel.py:203(run)
+        1    0.480    0.480    9.414    9.414 /usr/local/lib/python3.11/site-packages/abides_core/kernel.py:284(runner)
+    26839    0.176    0.000    3.927    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/agents/exchange_agent.py:308(receive_message)
+    45676    0.052    0.000    3.879    0.000 /opt/abides_fork/agents.py:63(receive_message)
+    45676    0.130    0.000    2.623    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/agents/trading_agent.py:268(receive_message)
+        1    0.001    0.001    2.364    2.364 /usr/local/lib/python3.11/site-packages/abides_core/kernel.py:482(terminate)
+    14655    0.139    0.000    2.360    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/order_book.py:75(handle_limit_order)
+        1    0.000    0.000    2.153    2.153 /usr/local/lib/python3.11/site-packages/abides_markets/agents/exchange_agent.py:254(kernel_terminating)
+        1    0.001    0.001    2.066    2.066 /usr/local/lib/python3.11/site-packages/abides_markets/agents/exchange_agent.py:910(analyse_order_book)
+        1    0.067    0.067    2.066    2.066 /usr/local/lib/python3.11/site-packages/abides_markets/agents/exchange_agent.py:915(get_time_dropout)
+    72515    0.049    0.000    1.783    0.000 /usr/local/lib/python3.11/site-packages/abides_core/agent.py:234(send_message)
+    72515    0.303    0.000    1.734    0.000 /usr/local/lib/python3.11/site-packages/abides_core/kernel.py:572(send_message)
+485509/209726    0.666    0.000    1.674    0.000 /usr/local/lib/python3.11/copy.py:128(deepcopy)
+    25204    0.162    0.000    1.638    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/agents/trading_agent.py:746(order_executed)
+        1    0.013    0.013    1.507    1.507 /opt/abides_fork/trace.py:104(extract_trace)
+    21083    0.142    0.000    1.370    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/order_book.py:229(execute_order)
+    22255    0.042    0.000    1.343    0.000 /usr/local/lib/python3.11/site-packages/pandas/core/frame.py:1366(iterrows)
+       73    0.001    0.000    1.282    0.018 /usr/local/lib/python3.11/site-packages/pandas/core/frame.py:609(__init__)
+    45676    0.057    0.000    1.226    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/agents/exchange_agent.py:888(send_message)
+22446/22441    0.133    0.000    1.219    0.000 /usr/local/lib/python3.11/site-packages/pandas/core/series.py:342(__init__)
+        1    0.381    0.381    1.150    1.150 /usr/local/lib/python3.11/site-packages/abides_core/utils.py:120(parse_logs_df)
+    96110    0.204    0.000    1.145    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/orders.py:129(__str__)
+   836/13    0.004    0.000    1.110    0.085 <frozen importlib._bootstrap>:1165(_find_and_load)
+   826/11    0.004    0.000    1.110    0.101 <frozen importlib._bootstrap>:1120(_find_and_load_unlocked)
+   787/12    0.003    0.000    1.108    0.092 <frozen importlib._bootstrap>:666(_load_unlocked)
+  2005/29    0.002    0.000    1.108    0.038 <frozen importlib._bootstrap>:233(_call_with_frames_removed)
+   653/11    0.002    0.000    1.108    0.101 <frozen importlib._bootstrap_external>:934(exec_module)
+    522/8    0.001    0.000    1.073    0.134 {built-in method builtins.__import__}
+   152353    0.123    0.000    1.064    0.000 /usr/local/lib/python3.11/site-packages/abides_core/agent.py:144(logEvent)
+    72515    0.167    0.000    1.012    0.000 /opt/abides_fork/config.py:102(get_latency)
+      586    0.961    0.002    0.965    0.002 {pandas._libs.lib.maybe_convert_objects}
+    14655    0.047    0.000    0.953    0.000 /usr/local/lib/python3.11/site-packages/abides_markets/agents/trading_agent.py:509(place_limit_order)
