@@ -1,0 +1,47 @@
+{
+  "image": "track3-candidate-control:8187954",
+  "scenario_id": "a350b90c-0348-5a64-8369-4d4d8bb3dbcd",
+  "seed_family": [
+    481425548,
+    2141560590,
+    2065014021,
+    2097829639,
+    546074625
+  ],
+  "raw_events_per_sec": [
+    7663.7744039415165,
+    7730.730702797882,
+    7489.581995970778,
+    7644.7228204269095,
+    7538.000035926522
+  ],
+  "warmup_discarded": true,
+  "median_events_per_sec": 7591.361428176716,
+  "mean_events_per_sec": 7600.758888780523,
+  "std_events_per_sec": 93.70762353078703,
+  "min_events_per_sec": 7489.581995970778,
+  "max_events_per_sec": 7730.730702797882,
+  "wall_clock_seconds": [
+    9.74037022300763,
+    9.638804255984724,
+    9.890405104029924,
+    9.790152208006475,
+    9.840010565996636
+  ],
+  "host_gpu_seconds": [
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "median_host_gpu_seconds": null,
+  "host_peak_memory_bytes": [
+    261959680,
+    262754304,
+    266235904,
+    263204864,
+    267431936
+  ],
+  "median_host_peak_memory_bytes": 264720384
+}

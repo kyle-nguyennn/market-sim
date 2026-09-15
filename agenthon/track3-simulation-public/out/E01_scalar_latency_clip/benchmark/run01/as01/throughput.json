@@ -1,0 +1,47 @@
+{
+  "image": "track3-e01-scalar-latency:5548dc2",
+  "scenario_id": "abd7b2b8-ecba-5a6e-a7c3-dfac68beb0ad",
+  "seed_family": [
+    284856273,
+    1440684060,
+    694078211,
+    694497556,
+    88749889
+  ],
+  "raw_events_per_sec": [
+    6248.019038159768,
+    6205.778163106014,
+    6234.262762241123,
+    6042.0424014495675,
+    6206.4926572171635
+  ],
+  "warmup_discarded": true,
+  "median_events_per_sec": 6206.135410161589,
+  "mean_events_per_sec": 6172.143996003467,
+  "std_events_per_sec": 75.98725838621097,
+  "min_events_per_sec": 6042.0424014495675,
+  "max_events_per_sec": 6234.262762241123,
+  "wall_clock_seconds": [
+    4.07649206003407,
+    4.0273756720125675,
+    4.028543704014737,
+    4.12526068900479,
+    4.076215247041546
+  ],
+  "host_gpu_seconds": [
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "median_host_gpu_seconds": null,
+  "host_peak_memory_bytes": [
+    142053376,
+    141869056,
+    142278656,
+    141701120,
+    141905920
+  ],
+  "median_host_peak_memory_bytes": 141887488
+}
