@@ -111,7 +111,16 @@ class ScenarioLatencyModel(LatencyModel):  # type: ignore[misc]  # untyped ABIDE
             value = base * (1.0 + self.random_state.pareto(self._alpha))
         else:
             value = self._mean_ns
-        return int(round(float(np.clip(value, self._min_ns, self._max_ns))))
+        # This is a scalar hot path: NumPy's generic clip dispatch costs more than
+        # the latency draw itself. Preserve np.clip's behavior for inverted bounds
+        # (return max_ns), then clamp with scalar comparisons.
+        if self._min_ns > self._max_ns:
+            value = self._max_ns
+        elif value < self._min_ns:
+            value = self._min_ns
+        elif value > self._max_ns:
+            value = self._max_ns
+        return int(round(float(value)))
 
 
 def _interval_ns(params: dict[str, Any]) -> int:
