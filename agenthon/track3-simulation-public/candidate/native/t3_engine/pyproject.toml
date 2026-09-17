@@ -1,0 +1,24 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.10",
+    "pybind11>=2.12",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "t3-fast-orderbook"
+version = "0.1.0"
+description = "Native order-book core for the Agenthon Track 3 simulator"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["python/t3_fast_orderbook"]
+
+[tool.scikit-build.cmake.define]
+T3_ENGINE_BUILD_PYTHON = "ON"
+T3_ENGINE_BUILD_TESTS = "OFF"
