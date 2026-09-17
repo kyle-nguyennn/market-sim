@@ -1,433 +1,811 @@
-# Bottleneck analysis — 2026-09-11
+# T3 optimization plan — invasive simulator replacement pivot
+
+_Last updated: 2026-09-16_
 
 ## Executive summary
 
-**Our optimization objective is to increase `median_events_per_sec` reported by
-[`throughput/timer.py`](../throughput/timer.py), while preserving the required
-simulation output.** For a fixed scenario configuration and seed, the required
-market-event count is fixed. We improve throughput by producing those events in
-less host-measured wall-clock time. Use unprofiled timer runs to judge success;
-use py-spy and cProfile to explain costs and choose experiments.
+The T3 optimization strategy is pivoting away from adapter-level micro-optimization.
+The new objective is to treat ABIDES as the **executable semantic specification** and
+progressively replace its expensive deterministic internals with a purpose-built,
+high-performance implementation.
 
-The established AS06 baseline is **7,015.28 events/sec**, measured by
-`throughput/timer.py` over four retained runs after one warm-up. The
-[saved throughput log](../out/baseline_as06/throughput.log) is the reference for
-subsequent AS06 comparisons under matching conditions.
-
-Profiling AS01 and AS06 shows that much of the baseline's runtime goes into handling
-messages and supporting work: formatting timestamps, copying log records, computing
-liquidity statistics after trading ends, and constructing output tables. Order
-matching matters, but the evidence does not justify treating the order book or event
-queue as the only bottleneck.
-
-The same major costs recur in both scenarios. AS06 produces about three times as
-many market-event records, while most major function costs increase by about
-2.7–2.9 times. The first optimization experiments should address lazy debug
-formatting, pandas row iteration during shutdown, scalar latency clipping, and
-redundant copying. These are proposed experiments; no speedup has been demonstrated
-yet. Output semantics must remain unchanged.
-
-`throughput/timer.py` measures the whole container invocation, so shutdown,
-formatting, trace construction, and output writing all contribute to its runtime.
-A lower `Kernel.runner` time or a better rate inside the container's `events.json`
-is supporting evidence; the comparison metric is the timer's output.
-
-## Optimization objective and event-count definition
-
-The local timer computes each run's rate and the overall result as:
+The optimization target remains:
 
 ```text
-run_events_per_sec = n_events / host_wall_clock_sec
-median_events_per_sec = median(run_events_per_sec for retained runs)
+maximize median_events_per_sec
+subject to semantic correctness = PASS
 ```
 
-In `run_single`, the timer reads `n_events` from the container's `events.json`.
-The baseline [simulate.py](../baselines/abides_fork/simulate.py) writes that value
-as `int(len(trace))`: the row count of the canonical market-event table saved to
-`trace.parquet`. It counts submissions, acceptances, cancellations, replacements,
-fills, partial fills, and quote updates. It does not count every kernel message,
-wakeup, log entry, or function call. The separate `n_messages`/message-ledger count
-is not the throughput numerator.
+The established local AS06 baseline remains **7,015.28 events/sec** from
+`throughput/timer.py` under the previously recorded conditions. Use repeated,
+unprofiled timer runs for performance decisions. Use profiles and differential tests
+to explain costs and validate equivalence.
 
-For the specific scenario/seed pairs profiled here, the required output contains
-24,695 market events for AS01 and 74,502 for AS06. Keeping that count and the required
-semantics unchanged while halving a run's host wall time doubles its throughput.
-All supporting work still contributes to the denominator, even if it creates no
-additional counted events. Do not inflate the count or omit required output to
-improve the reported rate.
+The first invasive replacement target is the **ABIDES OrderBook**, implemented as a
+C++ `FastOrderBook` exposed through a thin Python/pybind11 compatibility layer. The
+ABIDES kernel, event scheduling, agent wakeups, latency model, and seeded NumPy RNG
+streams remain unchanged during this first phase.
 
-**Fixed count means fixed configuration AND seed.** `measure_throughput` derives a
-deterministic seed family from the scenario's `base_seed` (falling back to `seed`)
-and runs the image once per derived seed. Different repeats can therefore have
-different event counts, including counts different from the profiles above. Match
-the scenario file, seed family, repeat count, warm-up policy, and resource settings
-between baseline and candidate. Compare their medians of per-run rates; do not
-divide the original profile's event count by a timer run's elapsed time or replace
-the metric with total events divided by total time.
+The staged replacement path is now:
 
-The timer's numerator is locally self-reported: it does not independently recount
-the Parquet rows. Validate the count and simulation semantics separately. The
-[README's official scoring description](../README.md#how-throughput-is-measured)
-uses Runner-counted rows and trusted timing; the local timer is our development
-comparison tool, not an official score. That distinction does not change the
-objective for the experiments in this note.
+```text
+Stage 0  ABIDES baseline as oracle
+Stage 1  ABIDES Kernel + ABIDES ExchangeAgent + C++ FastOrderBook
+Stage 2  ABIDES Kernel + FastExchange + C++ FastOrderBook
+Stage 3  FastKernel + FastExchange + FastOrderBook + ABIDES-compatible RNG boundary
+Stage 4  collapse object-heavy compatibility layers and optimize output path
+```
 
-## Setup and supporting artifacts
+The strategic principle is:
 
-We used the Docker workflow in [the profiling guide](20260908_profile.md). The
-[baseline Dockerfile](../baselines/Dockerfile) supplies Python 3.11, NumPy 1.26.4,
-pandas 1.5.3, SciPy 1.17.1, PyArrow 15.0.2, and coloredlogs 15.0.1, plus ABIDES at
-`f9cbe51342b7dedd9587e4e069040d68a5c6477f` with the four baseline patches. The
-profiling derivative adds py-spy 0.4.2; cProfile runs in the original baseline image.
-The documented run configuration uses four CPUs, 16 GiB memory, and no network.
-The saved metadata does not independently record Docker resource settings or image
-digests; future runs should capture those alongside the exact command.
+> Preserve stochastic behavior and externally visible semantics; replace deterministic
+> machinery aggressively behind validated boundaries.
 
-Docker resolved the host setup issues encountered earlier: missing adapter/engine
-imports and pandas 3 timestamp-resolution incompatibilities. A host ABIDES
-installation is unnecessary for this workflow.
+---
 
-| Scenario | Public configuration | py-spy artifacts | cProfile artifacts |
-|---|---|---|---|
-| AS01 | [as01_base_mix.json](../regression_suite/scenarios/as01_base_mix.json) | [Flamegraph](../out/baseline_as01/profile.svg), [metadata](../out/baseline_as01/events.json) | [Cumulative log](../out/baseline_as01_cprofile/cumtime_call.log), [raw profile](../out/baseline_as01_cprofile/t3.prof), [metadata](../out/baseline_as01_cprofile/events.json) |
-| AS06 | [as06_throughput_fast.json](../regression_suite/scenarios/as06_throughput_fast.json) | [Flamegraph](../out/baseline_as06/profile.svg), [metadata](../out/baseline_as06/events.json) | [Cumulative log](../out/baseline_as06_cprofile/cumtime_call.log), [raw profile](../out/baseline_as06_cprofile/t3.prof), [metadata](../out/baseline_as06_cprofile/events.json) |
+## 1. Why the strategy changed
 
-Each run directory also contains `trace.parquet` and `message_trace.parquet`. These
-links refer to local artifacts under the Git-ignored `out/` directory; sharing this
-note alone does not share the profiles.
+The previous plan prioritized low-risk Python and adapter optimizations such as lazy
+formatting, pandas cleanup, redundant copying, and trace construction. Those remain
+valid optimizations, but they are no longer the main technical direction.
 
-Both scenarios have a 20-second simulated horizon and 20 trading agents: 12 noise,
-four value, two momentum, and two market makers. They use different scenario
-settings and seeds: AS01 uses `1806084051`; AS06 uses `1040981657`. Their comparison
-describes different workloads, not a before/after optimization experiment.
+Reasons for the pivot:
 
-## Established AS06 throughput baseline
+1. The competition permits arbitrary internal architecture as long as the required
+   CLI/output contract and semantic gates are preserved.
+2. The supplied ABIDES implementation is a baseline engine, not an architectural
+   requirement.
+3. Profiling shows substantial time inside the actual simulator stack:
+   `Kernel.runner`, `ExchangeAgent.receive_message`,
+   `OrderBook.handle_limit_order`, message delivery, copying, and logging.
+4. Optimizing only the adapter has limited upside and does not attack the central
+   systems problem of the track.
+5. T3 is more naturally interpreted as: **reimplement the same market mechanism more
+   efficiently**, not "make this Python adapter slightly faster."
 
-Source: [out/baseline_as06/throughput.log](../out/baseline_as06/throughput.log).
-This is a completed `throughput/timer.py` measurement of
-`track3-abides-baseline:latest` on `as06_throughput_fast.json`. Five container runs
-were performed; the first was discarded as warm-up and four contributed to the
-summary.
+Adapter/output micro-optimizations are now secondary cleanup work after the native
+execution path is established.
 
-| Metric | Result |
-|---|---:|
-| **Primary metric: `median_events_per_sec`** | **7,015.28 events/sec** |
-| Mean of retained rates | 7,024.53 events/sec |
-| Population standard deviation of retained rates | 181.96 events/sec |
-| Minimum / maximum retained rate | 6,805.26 / 7,262.29 events/sec |
-| Retained-run host wall-clock range | 10.200–10.950 s |
-| Retained runs / total runs | 4 / 5 |
+---
 
-The individual measurements are:
+## 2. Baseline facts retained from profiling
 
-| Run | Use | Seed | Host wall-clock time | Events/sec |
-|---|---|---:|---:|---:|
-| 1 | Warm-up; excluded | 481425548 | 11.693 s | 6,383.79 |
-| 2 | Retained | 2141560590 | 10.950 s | 6,805.26 |
-| 3 | Retained | 2065014021 | 10.200 s | 7,262.29 |
-| 4 | Retained | 2097829639 | 10.493 s | 7,132.88 |
-| 5 | Retained | 546074625 | 10.753 s | 6,897.68 |
+### Primary local comparison metric
 
-The exact saved median is `7015.281130007508`. It is the median of the four
-retained per-run rates, with each rate using that seed's event count and the
-host-measured container duration. Do not substitute the original profile's 74,502
-rows for each timer repeat: this batch uses a derived seed family.
+For AS06, the established baseline is:
 
-Use this result as the initial AS06 comparison baseline:
+```text
+median_events_per_sec = 7015.281130007508
+```
+
+Reference formula:
 
 ```text
 AS06 speedup = candidate.median_events_per_sec / 7015.281130007508
 ```
 
-Match the scenario, seed family, repeat/warm-up policy, resource limits, and host
-conditions. The standard deviation is about 2.6% of the mean across these four
-runs; it describes this batch, not a confidence interval or a universal threshold
-for accepting a speedup. Repeat baseline and candidate batches before drawing
-conclusions about small differences.
+Match scenario, seed family, repeat/warm-up policy, resource limits, and host
+conditions before interpreting a speedup.
 
-The approximately 9,755 events/sec in the AS06 py-spy run's `events.json` is a
-separate internal-timer diagnostic. **7,015.28 events/sec is the established local
-throughput measurement to optimize against.** Their difference cannot be assigned
-solely to profiler overhead: their timing boundaries and seed sets also differ.
-The throughput log records the image tag but not its immutable digest, host
-fingerprint, or explicit CPU/memory options, so preserve those with future runs.
+### Profiling summary
 
-## Profiling results and timing boundaries
-
-| Measurement | AS01 | AS06 |
-|---|---:|---:|
-| Market-event trace rows | 24,695 | 74,502 |
-| Message/wakeup ledger rows | 30,087 | 83,337 |
-| ABIDES wall time under py-spy | 2.668 s | 7.637 s |
-| Baseline's internal events/sec under py-spy | 9,257 | 9,755 |
-| Samples represented in the SVG | 506 | 1,065 |
-| ABIDES wall time under cProfile | 4.171 s | 11.779 s |
-| cProfile total reported time | 6.097 s | 15.157 s |
-| cProfile function calls, including recursion | 8,238,720 | 21,370,119 |
-
-The timer in [simulate.py](../baselines/abides_fork/simulate.py) wraps
-`abides.run(config)`. It includes kernel initialization, the event loop, and
-termination. It excludes earlier configuration construction and later canonical
-trace extraction and file writing. Both profilers observe the larger Python
-process, including startup and imports. The table contains profiling diagnostics;
-the internal rates are not `throughput/timer.py` results. Record the timer's
-`median_events_per_sec` separately when assessing an optimization.
-
-### Which work affects the timer's result?
-
-In `timed_container_run`, the measurement surrounds the bounded container call:
-
-```python
-t_start = time.monotonic()
-proc = bounded_container_run(cmd, cidfile=cidfile, timeout_sec=timeout_sec)
-wall_clock = time.monotonic() - t_start
-```
-
-The call launches `docker run` and waits for completion. Sampler setup/teardown is
-outside these timestamps; reading `events.json` on the host happens afterward.
-Work inside the invocation has no exemption because it is called `terminate`,
-logging, or serialization. Discarding the first warm-up run excludes that run from
-the aggregate; it does not subtract startup or shutdown from later runs.
-
-| Work | Inside baseline `events.json` timer? | Inside `throughput/timer.py` measurement? |
-|---|---|---|
-| Event dispatch, matching, latency | Yes | Yes |
-| `Kernel.terminate`, including liquidity analysis | Yes | Yes |
-| Debug formatting during simulation/termination | Yes | Yes |
-| Canonical trace/ledger extraction | No | Yes |
-| Parquet and metadata writes in the container | No | Yes |
-| Imports/configuration in the container | No | Yes |
-
-Optimize any significant cost in this interval that can be reduced while keeping
-the same correct output. The exact official Runner boundary is outside this
-checkout; it is unnecessary to speculate about that boundary when comparing
-baseline and candidate with this concrete local timer.
-
-This also separates **required behavior** from **incidental implementation work**:
-the gates evaluate the output contract and simulation semantics, not preservation
-of every ABIDES internal diagnostic. An unused shutdown diagnostic could potentially
-be omitted after proving that no required output, later shutdown consumer, or
-supported interface depends on it. Do not remove `Kernel.terminate` wholesale or
-disable event logging: shutdown returns the state used for extraction, and
-`extract_trace` reads agent logs through `parse_logs_df`. Lazy debug formatting is
-a narrower change than suppressing those required records.
-
-The SVG sample totals are read from their `all` frames; AS01's SVG represents 506
-samples even though its console reported 527. Use the SVG denominator when
-interpreting its percentages. Flamegraph width includes descendants and is not a
-chronological timeline. cProfile's `cumtime` includes callees, while `tottime`
-excludes them; nested rows must not be added together. The printed `percall` values
-often round to `0.000`, which does not mean the work is free.
-
-cProfile's ABIDES times are about 54–56% higher than the corresponding py-spy runs.
-Instrumentation overhead is a factor, but these separate executions do not isolate
-its exact contribution. Use repeated unprofiled measurements to establish speedups.
-
-### cProfile comparison
-
-The following values come from the cumulative logs and raw profiles linked above.
-Times are cumulative unless marked as self time.
-
-| Function or phase | AS01 | AS06 | AS06 / AS01 |
-|---|---:|---:|---:|
-| `Kernel.runner` | 3.344 s | 9.414 s | 2.82× |
-| Exchange `receive_message` | 1.410 s | 3.927 s | 2.79× |
-| Adapter `receive_message` | 1.367 s | 3.879 s | 2.84× |
-| `Kernel.terminate` | 0.825 s | 2.364 s | 2.87× |
-| `OrderBook.handle_limit_order` | 0.816 s | 2.360 s | 2.89× |
-| `get_time_dropout` | 0.707 s | 2.066 s | 2.92× |
-| `deepcopy`, including recursive work | 0.621 s | 1.674 s | 2.69× |
-| `extract_trace` | 0.541 s | 1.507 s | 2.79× |
-| `get_latency` | 0.370 s | 1.012 s | 2.74× |
-| `fmt_ts` self time | 0.323 s | 0.938 s | 2.90× |
-| `extract_message_trace` | 0.217 s | 0.714 s | 3.30× |
-
-AS06 has 3.02× as many trace rows and 2.77× as many ledger rows. Most major costs
-grow roughly with activity, without an obvious new dominant path. Two scenarios
-and one execution per profiler do not establish asymptotic scaling or statistical
-significance. Message-trace extraction's 3.30× growth warrants more measurements.
-
-## What the profiles establish
-
-### Message handling dominates the event loop
-
-Exchange and adapter message handlers together account for about 83% of event-loop
-time in both runs. Their own bodies are much cheaper: exchange-handler self time
-is 0.062/0.176 s for AS01/AS06, and adapter-handler self time is 0.019/0.052 s.
-Similarly, limit-order handling has only 0.047/0.139 s self time despite its
-0.816/2.360 s cumulative cost. Inspect the descendants rather than optimizing only
-the dispatch wrappers. Sending messages, processing executions, logging, copying,
-and latency calculations are nested within these paths.
-
-### Shutdown liquidity analysis is substantial
-
-`Kernel.terminate` consumes about 20% of the timed ABIDES run. Within it,
-`get_time_dropout` accounts for about 17% of AS01's ABIDES time and 17.5% of AS06's.
-The raw profiles identify its main costs:
-
-| Callee of `get_time_dropout` | AS01 | AS06 |
-|---|---:|---:|
-| pandas `iterrows` | 0.458 s | 1.343 s |
-| pandas Series indexing | 0.203 s | 0.586 s |
-
-This function constructs a DataFrame from book history and walks rows to compute
-periods without bid/ask liquidity. These are end-of-run metrics, but they still
-fall inside the current ABIDES timer.
-
-### Formatting and copying are recurring costs
-
-`fmt_ts` is called 50,153 times in AS01 and 147,049 times in AS06. It consumes
-0.323/0.938 s of self time. Order string representations account for 0.205/0.603 s
-of that time; `Order.to_dict()` accounts for 0.118/0.335 s.
-
-The inspected baseline source includes eager debug formatting, for example
-`logger.debug(f"Received notification of execution for: {order}")`. Python
-constructs this string before the logger decides whether to emit it. Not all
-formatting is disposable: some supplies required event records.
-
-`deepcopy` consumes 0.621/1.674 s cumulatively. Copies directly requested by
-`Agent.logEvent` account for 0.346/0.925 s. The source also copies orders for agent
-state and event serialization, so removing copying indiscriminately could make
-historical records change when live orders are mutated.
-
-### Scalar clipping costs more than the latency random draw
-
-The [latency adapter](../baselines/abides_fork/config.py) is called 25,865 times in
-AS01 and 72,515 times in AS06. Its cost decomposes as follows:
-
-| Latency operation | AS01 | AS06 |
-|---|---:|---:|
-| Entire `get_latency` | 0.370 s | 1.012 s |
-| `np.clip` call | 0.248 s | 0.674 s |
-| Random lognormal draw | 0.050 s | 0.140 s |
-
-NumPy's generic clipping machinery is prominent when used once per scalar message
-latency. This supports testing scalar clipping without changing the random draws.
-
-### Output construction matters more than Parquet writing here
-
-Canonical event and message-trace extraction together consume 0.758 s in AS01 and
-2.221 s in AS06 under cProfile. Within event extraction, `parse_logs_df` takes
-0.419/1.150 s. The py-spy profiles also show substantial extraction work; the two
-Parquet write call sites together occupy only about 2.2%/0.7% of represented
-AS01/AS06 samples. Improving output construction can improve
-`throughput/timer.py`'s `median_events_per_sec` without changing the current
-`events.json` ABIDES timer. Judge the experiment by the former.
-
-### Message counts describe activity, not CPU shares
-
-In AS06's [message ledger](../out/baseline_as06/message_trace.parquet), spread queries
-and responses contribute 21,560 records, or 25.9% of the ledger. Execution messages
-contribute 25,204; limit-order messages contribute 14,655. Frequent queries are a
-candidate for more detailed measurement, but their frequency does not establish
-their CPU share. Ledger timestamps and latency fields describe simulated time,
-not profiling durations.
-
-## Suggested optimization areas
-
-Priorities below reflect how focused an experiment can be, its observed cost, and
-the difficulty of preserving behavior. Profile totals are not promised savings.
-Success for every area below means improved `median_events_per_sec` from
-unprofiled `throughput/timer.py` runs, with unchanged required events and semantics.
-Shutdown and formatting remain in scope because they delay container completion.
-Trace construction also remains a substantial candidate (2.221 s in AS06 under
-cProfile); its position below the smaller, more isolated experiments is about
-implementation scope, not exclusion from the measurement.
-
-| Priority | Area | First experiment | Validation needed |
-|---|---|---|---|
-| 1 | Eager debug formatting | Use lazy logger arguments, such as `logger.debug("Received notification of execution for: %s", order)`, and guard other expensive debug-only expressions. | Same simulation traces and required event records; check debug output when enabled. |
-| 2 | Shutdown row iteration | Compute liquidity durations directly from book records or equivalent arrays, avoiding per-row pandas Series construction. | Same metrics for empty books, bid/ask liquidity transitions, repeated timestamps, and terminal intervals. |
-| 3 | Scalar latency clipping | Replace scalar `np.clip` with equivalent scalar comparisons. | Same sampled values, clipping boundaries, rounding, integer conversion, RNG state, and message ordering. |
-| 4 | Redundant copying | Identify duplicate snapshots in `logEvent` and order serialization; copy only data that must remain independent. | Historical logs remain immutable under later order mutation; fills and message-ledger content remain unchanged. |
-| 5 | Trace construction | Reduce repeated conversion and intermediate objects in `parse_logs_df`, `extract_trace`, and `extract_message_trace`. | Same schemas, integer timestamp precision, null handling, stable row order, event classification, and ledger causality. |
-| 6 | Matching and scheduling | Reprofile after the focused changes; inspect remaining order-book and queue costs before redesigning them. | Full semantic regression, including priority, partial fills, cancellations, and causal ordering. |
-
-The current evidence does not establish heap operations as the dominant cost, nor
-does it establish a need for GPU acceleration. Required logging or ledger work
-cannot simply be removed to make the profiler look faster. Native costs may also
-be attributed to Python callers in the existing py-spy runs, which did not request
-native-stack profiling.
-
-## Correctness evidence and next measurements
-
-All eight saved Parquet files were checked against the SHA-256 values in their
-respective `events.json`. For each scenario, py-spy and cProfile runs produced
-identical event-trace and message-trace hashes. This establishes consistency of
-these saved outputs across the two profilers; it is not a replacement for regression
-against the expected simulator semantics. The AS01 console also contained warnings
-about fills for orders absent from an agent's outstanding-order list. They did not
-prevent completion, but their cause has not been resolved by this profiling work.
-
-For each optimization experiment:
-
-1. Change one area and rebuild the baseline and profiling images. Record source
-   revision, image digest, scenario/seed, Docker settings, profiler options, and the
-   exact command. Use a separate folder, for example
-   `out/lazy_logging_as01_run01/`.
-2. Compare baseline and candidate outputs for both scenarios and run the public
-   regression workflow described in [the baseline README](../baselines/README.md).
-   For intended behavior-preserving changes, investigate any hash difference with
-   semantic comparisons; serialization differences alone need not imply a market
-   behavior difference.
-3. Run the unprofiled timer commands below for baseline and candidate under
-   identical resource settings on an otherwise-idle host. Match the seed families
-   and keep runs sequential. Compare `median_events_per_sec`, retaining
-   `raw_events_per_sec`, `wall_clock_seconds`, and `std_events_per_sec` to assess
-   variation. ABIDES time and profile percentages are secondary diagnostics.
-4. Reprofile to verify that the targeted cost decreased and identify the next
-   limiting path. In the cProfile browser, use the commands below; callers/callees
-   resolve costs hidden by the top-40 cumulative report.
+Representative AS06 costs previously measured include:
 
 ```text
-sort cumulative
-stats 40
-sort time
-stats 40
-callers fmt_ts
-callers deepcopy
-callees get_time_dropout
-callees get_latency
-callees handle_limit_order
+Kernel.runner                         ~9.4 s cumulative under cProfile
+ExchangeAgent.receive_message         ~3.9 s cumulative
+adapter receive_message               ~3.9 s cumulative
+OrderBook.handle_limit_order          ~2.36 s cumulative
+Kernel.terminate                      ~2.36 s cumulative
+get_time_dropout                      ~2.07 s cumulative
+copy.deepcopy                         ~1.67 s cumulative
+extract_trace                         ~1.51 s cumulative
+get_latency                           ~1.01 s cumulative
+fmt_ts                                ~0.94 s self time
+extract_message_trace                 ~0.71 s cumulative
 ```
 
-### Measure the primary metric with `throughput/timer.py`
+These cumulative numbers overlap and must not be summed. They establish where to
+look, not independent phase percentages.
 
-From the repository root, measure the baseline image using five runs, discarding
-the first as warm-up. The host runs the timer; the simulator runs inside Docker.
-These commands launch no profiler, and `--output` creates its parent directory.
+The key implication for the new plan is that the Exchange/OrderBook path is large,
+stateful, deterministic, and separable enough to replace without immediately
+rewriting stochastic behavior.
 
-```bash
-image=track3-abides-baseline:latest
-variant=baseline
+---
 
-python throughput/timer.py \
-    --image "$image" \
-    --scenario regression_suite/scenarios/as01_base_mix.json \
-    --runs 5 --discard-warmup --cpus 4 --memory 16g \
-    --output "out/${variant}_as01_throughput/throughput.json"
+## 3. ABIDES is now the executable specification
 
-python throughput/timer.py \
-    --image "$image" \
-    --scenario regression_suite/scenarios/as06_throughput_fast.json \
-    --runs 5 --discard-warmup --cpus 4 --memory 16g \
-    --output "out/${variant}_as06_throughput/throughput.json"
-```
+Do not preserve ABIDES internal architecture merely because it exists.
 
-After building a candidate image, repeat the commands with its image tag and a new
-`variant`, for example `lazy_logging`. Use distinct variant suffixes for repeated
-batches you want to retain. Preserve the scenario files and all timer options.
-Confirm the saved `seed_family` and `warmup_discarded` agree before comparing.
+For each component, identify its externally observable state transition and reproduce
+that behavior more efficiently.
 
-For each scenario, report:
+For the order book, the conceptual contract is:
+
+\[
+(B, C) \rightarrow (B', F, R)
+\]
+
+where:
+
+- `B` = current book state,
+- `C` = incoming command,
+- `B'` = resulting book state,
+- `F` = ordered execution/fill sequence,
+- `R` = ordered protocol-visible responses / book changes.
+
+Implementation details inside ABIDES are not sacred. Observable semantics are.
+
+The baseline should therefore be treated as an oracle for:
+
+- price-time priority,
+- partial-fill behavior,
+- execution price,
+- cancellation semantics,
+- modification/replacement semantics,
+- self-trade prevention behavior,
+- order identifiers,
+- fill ordering,
+- response ordering,
+- book state transitions,
+- timing-sensitive protocol effects.
+
+---
+
+## 4. Stochastic boundary: preserve first, replace later
+
+The RNG layer is intentionally **not** part of the first rewrite.
+
+The current Track 3 baseline creates deterministic child `np.random.RandomState`
+streams from the scenario seed. Randomness is concentrated in a few boundaries:
+
+### Configuration seed fan-out
+
+Keep the existing fixed child-stream construction order.
+
+### NoiseTrader
+
+Each action consumes stochastic values for roughly:
 
 ```text
-speedup = candidate.median_events_per_sec / baseline.median_events_per_sec
+order size
+side
+price offset
 ```
 
-Only call the optimization successful when this metric improves consistently
-across repeated batches and correctness checks still pass. A lower cProfile time,
-fewer function calls, or a higher rate in the simulator's own `events.json` is
-insufficient on its own. The timer normally removes its temporary simulation
-outputs, so retain correctness runs separately rather than assuming the summary
-JSON also preserves their traces.
+### ValueTrader / oracle observation
+
+The stochastic input enters through oracle observation using the trader's seeded
+`RandomState`.
+
+### Latency model
+
+Stochastic latency consumes RNG per qualifying message. This is the most sensitive
+boundary because event/message ordering determines which draw maps to which message.
+
+### Deterministic agents
+
+MarketMaker and MomentumTrader behavior is deterministic given the observed state.
+
+### Rule
+
+During the OrderBook replacement:
+
+```text
+DO NOT change RNG implementation
+DO NOT change event ordering
+DO NOT change message scheduling
+DO NOT change latency draw ordering
+DO NOT change agent wakeup behavior
+```
+
+This keeps the first invasive experiment focused on deterministic state transitions.
+
+---
+
+## 5. Stage 0 — freeze ABIDES as the oracle
+
+Before implementing the native book, preserve a known-good baseline.
+
+Required artifacts:
+
+- baseline commit/tag,
+- AS01/AS06 traces,
+- fill sequence,
+- message trace,
+- throughput logs,
+- semantic regression results,
+- representative protocol scenarios.
+
+### Differential tooling
+
+We need two levels of differential testing.
+
+#### A. Whole-simulator differential
+
+Compare:
+
+```text
+baseline trace.parquet
+candidate trace.parquet
+baseline message_trace.parquet
+candidate message_trace.parquet
+```
+
+Report the first semantic divergence.
+
+#### B. OrderBook boundary replay
+
+Instrument the boundary between ExchangeAgent and OrderBook and record a replayable
+command stream such as:
+
+```text
+ADD LIMIT
+CANCEL
+MODIFY / REPLACE
+QUERY / SNAPSHOT where required for validation
+```
+
+Replay the same commands into:
+
+```text
+ABIDES OrderBook
+C++ FastOrderBook
+```
+
+After every command compare:
+
+- ordered fills,
+- best bid/ask,
+- remaining quantity,
+- active-order set,
+- price-level ordering,
+- FIFO order within levels,
+- any externally required book/log event.
+
+Desired failure output:
+
+```text
+command index: 38192
+command: LIMIT BID id=1298 px=100003 qty=7
+first mismatch: fill sequence
+baseline: ...
+candidate: ...
+book before: ...
+book after baseline: ...
+book after candidate: ...
+```
+
+This harness is a hard prerequisite for aggressive book optimization.
+
+---
+
+## 6. Stage 1 — C++ FastOrderBook behind ABIDES ExchangeAgent
+
+### Architecture
+
+```text
+ABIDES Kernel
+      |
+      v
+ABIDES ExchangeAgent
+      |
+      | Python ABIDES Order / command
+      v
+FastOrderBookAdapter.py
+      |
+      | primitive fields
+      v
+C++ FastOrderBook (pybind11)
+      |
+      | compact MatchResult / BookResult
+      v
+FastOrderBookAdapter.py
+      |
+      v
+ABIDES-compatible execution/messages/log state
+```
+
+### Why this boundary
+
+This preserves:
+
+- ABIDES kernel scheduling,
+- message ordering,
+- computation delays,
+- latency model and RNG draw order,
+- agent behavior,
+- ExchangeAgent protocol behavior.
+
+Only deterministic book state and matching are replaced.
+
+That gives the first-stage invariant:
+
+```text
+same incoming book command + same book state
+=> same resulting book state + same ordered executions
+```
+
+### Language / binding
+
+Use **C++ + pybind11** for the initial native implementation.
+
+Do not manipulate Python objects inside the matching loop. Convert at the boundary to
+primitive native fields.
+
+Illustrative native records:
+
+```cpp
+struct Order {
+    uint64_t order_id;
+    uint32_t agent_id;
+    int64_t price;
+    uint32_t quantity;
+    uint8_t side;
+    int64_t timestamp;
+};
+
+struct Fill {
+    uint64_t resting_order_id;
+    uint64_t incoming_order_id;
+    uint32_t resting_agent_id;
+    uint32_t incoming_agent_id;
+    int64_t price;
+    uint32_t quantity;
+};
+```
+
+One Python -> C++ call should process an entire book command, including all matches
+across price levels. Do not cross the language boundary per individual match step.
+
+---
+
+## 7. FastOrderBook v1 data structures
+
+Start with semantic clarity before exotic optimization.
+
+Suggested v1:
+
+```text
+bids: ordered price -> PriceLevel
+asks: ordered price -> PriceLevel
+order_id -> OrderHandle
+PriceLevel -> FIFO linked/list-like order queue
+```
+
+Reasonable initial C++ implementation:
+
+```text
+std::map for ordered active price levels
+std::unordered_map for direct order-id lookup
+stable FIFO container / intrusive links for orders at a level
+```
+
+Required complexity targets:
+
+```text
+best price        O(1) from begin()/cached handle
+order lookup      expected O(1)
+cancel            expected O(1) after lookup
+FIFO pop          O(1)
+partial decrement O(1)
+```
+
+Do not optimize away tree lookup until benchmark evidence says it matters.
+
+Potential later representations:
+
+- dense price arrays if tick range is bounded,
+- flat ordered vectors if active levels are small,
+- intrusive arena-allocated orders,
+- custom slab/arena allocator,
+- struct-of-arrays representation,
+- specialized integer price indexing.
+
+Every representation change must remain behind the differential harness.
+
+---
+
+## 8. Preserve semantics, not the Python object model
+
+The Python compatibility layer should preserve the subset of the ABIDES OrderBook
+surface required by ExchangeAgent and the regression suite.
+
+Do **not** port ABIDES Python classes one-for-one into C++.
+
+Bad native boundary:
+
+```text
+C++ repeatedly reading/writing py::object fields during matching
+```
+
+Preferred boundary:
+
+```text
+Python ABIDES object
+    -> extract primitive fields once
+    -> native match/update
+    -> return compact result once
+    -> construct required ABIDES-visible responses
+```
+
+This phase intentionally tolerates Python conversion overhead because the native core
+must first prove semantic equivalence. Later stages remove more of that boundary.
+
+---
+
+## 9. Logging and book history
+
+Do not blindly reproduce ABIDES' object-heavy logging path inside the native book.
+
+The profile showed meaningful cost from:
+
+- copying,
+- book logging,
+- shutdown analysis,
+- trace extraction.
+
+The native core should maintain compact mutation/event records where possible:
+
+```text
+ADD
+FILL
+PARTIAL_FILL
+CANCEL
+REPLACE
+LEVEL_CREATED
+LEVEL_REMOVED
+```
+
+Only materialize Python/logging structures needed by the current ExchangeAgent and
+required output.
+
+However, do not delete baseline log state until we have proved that:
+
+1. no Tier-A/Tier-B semantic check depends on it,
+2. trace extraction does not depend on it,
+3. shutdown/statistical metrics do not depend on it.
+
+The first goal is native matching equivalence, not simultaneous logging redesign.
+
+---
+
+## 10. FastOrderBook semantic checklist
+
+Before performance claims, verify all of these against ABIDES:
+
+- [ ] same-price FIFO
+- [ ] price priority
+- [ ] incoming aggressive order walks levels identically
+- [ ] partial fill
+- [ ] full fill
+- [ ] residual incoming quantity rests correctly
+- [ ] execution price matches ABIDES
+- [ ] cancel active order
+- [ ] cancel partially filled order
+- [ ] cancel nonexistent/already-completed order behavior
+- [ ] replace/modify semantics
+- [ ] order ID preservation
+- [ ] self-trade prevention behavior
+- [ ] empty-book behavior
+- [ ] best bid/ask transitions
+- [ ] level deletion when depth reaches zero
+- [ ] multiple executions from one incoming order preserve exact order
+- [ ] quantities and integer prices preserve exact types/ranges
+- [ ] book-visible state after every command matches
+
+Add targeted adversarial unit scenarios rather than relying only on whole-run traces.
+
+---
+
+## 11. Stage 1 success gate
+
+Do not proceed to ExchangeAgent replacement until all of the following hold:
+
+```text
+FastOrderBook replay differential: PASS
+Tier-A public semantic regression: PASS
+Tier-B required semantics/statistical gates: PASS
+repeat determinism: PASS
+AS06 throughput: measured improvement or clear hot-path shift
+```
+
+If the C++ book is semantically exact but total throughput gain is small, keep it if
+it creates the correct foundation for Stage 2; profile again before deciding whether
+the Python ExchangeAgent/message layer is now dominant.
+
+---
+
+## 12. Stage 2 — replace ExchangeAgent
+
+Once the book is exact, absorb ExchangeAgent protocol work into a lightweight
+implementation.
+
+Target architecture:
+
+```text
+ABIDES Kernel
+      |
+      v
+FastExchange
+      |
+      v
+C++ FastOrderBook
+```
+
+Preserve externally visible protocol semantics:
+
+- receive/send ordering,
+- accepted/rejected behavior,
+- spread queries,
+- execution responses,
+- cancellation/replacement responses,
+- computation delay semantics,
+- self-trade prevention,
+- market open/close behavior,
+- message ordering after multi-fill commands.
+
+The goal is to eliminate ABIDES object and dispatch overhead around the already-proven
+native matching core.
+
+---
+
+## 13. Stage 3 — replace Kernel / event engine
+
+Kernel replacement happens only after Exchange + OrderBook are stable.
+
+The fast kernel must reproduce the Track 3 subset of:
+
+- event priority queue,
+- timestamp ordering,
+- deterministic tie-breaking,
+- wakeups,
+- message scheduling,
+- computation delay,
+- latency application,
+- sender/recipient semantics,
+- termination boundaries.
+
+### RNG constraint
+
+Keep the existing stochastic streams at first.
+
+The most dangerous coupling is:
+
+```text
+message/event order
+    -> latency RNG consumption order
+    -> future delivery times
+    -> future event order
+```
+
+A single ordering difference can cascade through the entire run.
+
+Therefore the kernel rewrite should include optional debug instrumentation for:
+
+```text
+(event timestamp, tie-break sequence, sender, recipient, message type)
+latency RNG call index/value
+agent RNG call counters where useful
+```
+
+Use this only for differential debugging, not benchmark runs.
+
+---
+
+## 14. Revised optimization priority
+
+Old priority:
+
+```text
+adapter micro-optimization
+-> Python cleanup
+-> maybe native rewrite later
+```
+
+New priority:
+
+```text
+1. differential harness / executable specification
+2. C++ FastOrderBook
+3. integrate under ABIDES ExchangeAgent
+4. validate semantics and benchmark
+5. FastExchange
+6. validate and benchmark
+7. FastKernel with preserved RNG boundary
+8. collapse Python object model / trace path
+9. data-layout and allocator optimization
+10. only then consider deeper RNG/native stochastic replacement
+```
+
+Adapter formatting / pandas / serialization improvements may still be harvested, but
+they should not distract from the core replacement path.
+
+---
+
+## 15. Branching strategy
+
+Use isolated invasive branches.
+
+Current planned branch:
+
+```text
+feat/t3-fast-orderbook
+```
+
+Purpose:
+
+```text
+C++ FastOrderBook
++ pybind11 binding
++ Python compatibility adapter
++ order-book differential replay harness
++ semantic tests
++ benchmark integration
+```
+
+Do not mix Kernel replacement into this branch until the OrderBook stage is proven.
+
+Suggested later branches:
+
+```text
+feat/t3-fast-exchange
+feat/t3-fast-kernel
+perf/t3-native-output
+```
+
+Each stage must be mergeable/revertible independently.
+
+---
+
+## 16. Immediate implementation sequence
+
+### Milestone A — understand exact ABIDES OrderBook surface
+
+- [ ] enumerate methods called by ExchangeAgent
+- [ ] enumerate attributes read by ExchangeAgent / shutdown / trace code
+- [ ] document command semantics
+- [ ] document fill/result semantics
+- [ ] document book logging dependencies
+- [ ] document STP patch behavior
+
+### Milestone B — boundary recorder
+
+- [ ] record real AS01/AS06 OrderBook command stream
+- [ ] serialize primitive command fields
+- [ ] capture expected result after each command
+- [ ] capture optional compact book snapshot/hash
+
+### Milestone C — C++ skeleton
+
+- [ ] pybind11 build integrated into candidate Docker image
+- [ ] native order/price-level structures
+- [ ] limit-order insertion
+- [ ] matching across levels
+- [ ] partial fills
+- [ ] cancel
+- [ ] replace/modify if required by ABIDES surface
+
+### Milestone D — differential equivalence
+
+- [ ] replay AS01 stream
+- [ ] replay AS06 stream
+- [ ] protocol adversarial tests
+- [ ] zero mismatches
+
+### Milestone E — live integration
+
+- [ ] wire adapter into ExchangeAgent
+- [ ] run whole scenario
+- [ ] run public regression suite
+- [ ] compare first divergence if any
+
+### Milestone F — benchmark
+
+- [ ] repeat AS06 `throughput/timer.py`
+- [ ] compare median to 7,015.28 events/sec
+- [ ] re-profile candidate
+- [ ] identify new dominant path
+- [ ] decide whether to optimize native book further or move to FastExchange
+
+---
+
+## 17. Performance discipline
+
+For every candidate:
+
+```text
+Hypothesis:
+Change:
+Semantic result:
+Baseline metric:
+Candidate metric:
+Speedup:
+Profile shift:
+Decision:
+```
+
+Do not optimize C++ internals based on intuition alone. A native rewrite can still be
+slow if dominated by:
+
+- Python/C++ object conversion,
+- excessive allocations,
+- cache-unfriendly containers,
+- compatibility logging,
+- surrounding ExchangeAgent/message overhead.
+
+Measure after each integration step.
+
+---
+
+## 18. Kill / rollback criteria
+
+Rollback or isolate an approach if:
+
+- exact fill ordering cannot be reproduced,
+- order IDs diverge,
+- repeated runs become nondeterministic,
+- wrapper complexity grows into a second ABIDES implementation,
+- native/Python crossings occur in inner matching loops,
+- semantic regressions become opaque,
+- performance does not improve and the architecture does not unlock the next stage.
+
+A difficult semantic bug is not automatically a reason to abandon the native book;
+use the differential harness to localize it to the first divergent command.
+
+---
+
+## 19. Current working thesis
+
+The intended high-value solution is likely closer to a specialized simulator than to
+an optimized adapter.
+
+Our working decomposition is:
+
+```text
+KEEP EXACT INITIALLY
+--------------------
+scenario interpretation
+seed fan-out
+NumPy RandomState behavior
+agent stochastic policy
+latency RNG behavior
+event/message ordering
+
+REPLACE PROGRESSIVELY
+---------------------
+OrderBook
+ExchangeAgent internals
+Kernel/event machinery
+Python object-heavy state
+logging/copy-heavy paths
+trace/output materialization
+```
+
+The first invasive bet is deliberately the component with the cleanest deterministic
+boundary:
+
+```text
+ABIDES ExchangeAgent
+        ->
+C++ FastOrderBook
+```
+
+If that boundary proves exact, it becomes the anchor for replacing the rest of the
+ABIDES stack without conflating matching semantics, event semantics, and RNG
+compatibility in one rewrite.
+
+---
+
+## 20. Next action
+
+Start development on `feat/t3-fast-orderbook`.
+
+The first code task is **not** "write the fastest book." It is:
+
+> Build the smallest native order-book implementation and differential replay harness
+> that can prove command-by-command equivalence with ABIDES.
+
+Once equivalence is established, optimize the data structure and broaden the
+replacement boundary.
